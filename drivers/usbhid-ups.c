@@ -3154,6 +3154,33 @@ static int ups_infoval_set(hid_info_t *item, double value)
 	}
 
 	if (nutvalue != NULL) {
+		/* DELTA UPS602R2RT2N035: derive power state from fresh source. */
+		if (curDevice.VendorID == 0x05dd &&
+			curDevice.ProductID == 0x041b &&
+			strcmp(item->info_type, "input.source") == 0) {
+			if (nutvalue != NULL &&
+				strcmp(nutvalue, "normal") == 0) {
+				process_boolean_info("online");
+			} else if (nutvalue != NULL &&
+				strcmp(nutvalue, "battery") == 0) {
+				process_boolean_info("offline");
+			}
+		}
+
+		/*
+		* DELTA UPS602R2RT2N035 (VID:PID 05dd:041b):
+		* ACPresent is reported as 0 even when input.source
+		* reports normal. Do not let this HID flag override
+		* the power state derived from input.source.
+		*/
+		if (curDevice.VendorID == 0x05dd &&
+			curDevice.ProductID == 0x041b &&
+			item->hidpath != NULL &&
+			strcmp(item->hidpath,
+				"UPS.PowerSummary.PresentStatus.ACPresent") == 0) {
+			return 0;
+		}
+
 		/* deal with boolean items */
 		if (!strncmp(item->info_type, "BOOL", 4)) {
 			process_boolean_info(nutvalue);
