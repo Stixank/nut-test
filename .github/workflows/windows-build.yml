@@ -1,0 +1,87 @@
+name: Build NUT for Windows x64 (Cypress 0665:5161)
+
+on:
+  push:
+    branches:
+      - test-cypress-0665-5161
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-x64:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Install MinGW cross-build toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            git curl wget ca-certificates \
+            mingw-w64 \
+            autoconf automake libtool pkg-config pkgconf \
+            python3 python3-pygments \
+            aspell aspell-en \
+            unzip zip xz-utils
+
+      - name: Checkout NUT source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prepare generated build system
+        run: |
+          git config --global core.autocrlf input
+          chmod +x autogen.sh ci_build.sh scripts/Windows/*.sh
+          ./autogen.sh
+
+      - name: Build Windows x64 libusb dependency
+        run: |
+          set -euxo pipefail
+          ARCH=x86_64-w64-mingw32
+          PREFIX="/usr/$ARCH"
+          mkdir -p "$RUNNER_TEMP/nut-deps"
+          cd "$RUNNER_TEMP/nut-deps"
+          wget -q https://sourceforge.net/projects/libusb/files/libusb-1.0/libusb-1.0.26/libusb-1.0.26.tar.bz2
+          tar -xjf libusb-1.0.26.tar.bz2
+          cd libusb-1.0.26
+          ./configure --prefix="$PREFIX" --host="$ARCH"
+          make -j2
+          sudo make install
+          test -f "$PREFIX/lib/libusb-1.0.dll.a"
+          find "$PREFIX" -iname '*libusb*' -type f -print
+
+      - name: Cross-compile NUT for Windows x64
+        run: |
+          set -euxo pipefail
+          BUILD_TYPE=cross-windows-mingw-64 ./ci_build.sh
+
+      - name: Verify and package Windows bundle
+        run: |
+          set -euxo pipefail
+          INSTALL_DIR="scripts/Windows/nut_install_x86_64-w64-mingw32"
+          test -d "$INSTALL_DIR"
+          test -f "$INSTALL_DIR/bin/nutdrv_qx.exe"
+          test -f "$INSTALL_DIR/bin/usbhid-ups.exe"
+          echo "Commit: $(git rev-parse HEAD)" > "$INSTALL_DIR/BUILD-INFO.txt"
+          echo "Build: cross-windows-mingw-64 on ubuntu-22.04" >> "$INSTALL_DIR/BUILD-INFO.txt"
+          echo "Cypress fix: e999565a2edfc50177a9cf0018fed758371b7dfb" >> "$INSTALL_DIR/BUILD-INFO.txt"
+          echo "Executable drivers:"
+          find "$INSTALL_DIR" -type f -iname '*.exe' -print | sort
+          echo "Bundled DLLs:"
+          find "$INSTALL_DIR" -type f -iname '*.dll' -print | sort
+          test -n "$(find "$INSTALL_DIR" -type f -iname '*.dll' -print -quit)"
+          tar -czf nut-windows-x64.tar.gz -C scripts/Windows nut_install_x86_64-w64-mingw32
+          tar -tzf nut-windows-x64.tar.gz | grep -E '/bin/nutdrv_qx\.exe$'
+
+      - name: Upload Windows x64 bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: nut-windows-x64-cypress-0665-5161
+          path: nut-windows-x64.tar.gz
+          if-no-files-found: error
+          retention-days: 14
