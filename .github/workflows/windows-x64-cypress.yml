@@ -1,0 +1,97 @@
+name: Build NUT for Windows x64 (Cypress 0665:5161)
+
+on:
+  push:
+    branches:
+      - test-cypress-0665-5161
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-x64:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout NUT source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up MSYS2 MinGW64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: >-
+            base-devel
+            mingw-w64-x86_64-toolchain
+            autoconf-wrapper
+            automake-wrapper
+            libtool
+            mingw-w64-x86_64-libltdl
+            mingw-w64-x86_64-gcc
+            ccache
+            git
+            aspell
+            aspell-en
+            python
+            mingw-w64-x86_64-python-pygments
+            mingw-w64-x86_64-winpthreads-git
+            mingw-w64-x86_64-libusb
+            mingw-w64-x86_64-libusb-compat-git
+            mingw-w64-x86_64-neon
+            libneon-devel
+            mingw-w64-x86_64-libgd
+            mingw-w64-x86_64-cppunit
+            mingw-w64-x86_64-nss
+            mingw-w64-x86_64-openssl
+            p7zip
+
+      - name: Build prerequisite net-snmp for Windows
+        run: |
+          set -e
+          export PATH="/mingw64/bin:$PATH"
+          bash ./scripts/Windows/build-mingw-prereqs.sh
+
+      - name: Configure and build NUT
+        run: |
+          set -e
+          export PATH="/mingw64/bin:$PATH"
+          CI_SKIP_CHECK=true \
+          CANBUILD_WITH_LIBMODBUS_USB=yes \
+          WITH_LIBNUTPRIVATE=true \
+          NUT_SSL_VARIANTS=nss \
+          ./ci_build.sh --with-docs=no
+
+      - name: Install relocatable Windows bundle
+        shell: msys2 {0}
+        run: |
+          set -e
+          export PATH="/mingw64/bin:$PATH"
+          VERSION="$(git describe --always --dirty)"
+          DEST="$PWD/.dist/NUT-for-Windows-x86_64-$VERSION"
+          rm -rf .dist
+          mkdir -p .dist
+          make -j2 install-win-bundle DESTDIR="$DEST"
+          test -f "$DEST/mingw64/bin/nutdrv_qx.exe" || {
+            echo "ERROR: nutdrv_qx.exe was not found in the expected bundle path"
+            find "$DEST" -iname 'nutdrv_qx.exe' -o -iname '*.dll'
+            exit 1
+          }
+          find "$DEST" -iname 'nutdrv_qx.exe' -o -iname '*.dll' | sort
+          7z a -tzip "$PWD/NUT-Windows-x64-$VERSION.zip" "$DEST/*"
+
+      - name: Upload Windows x64 bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: NUT-Windows-x64-cypress-0665-5161
+          path: NUT-Windows-x64-*.zip
+          if-no-files-found: error
+          retention-days: 14
