@@ -902,6 +902,18 @@ static int	cypress_command(const char *cmd, size_t cmdlen, char *buf, size_t buf
 			return ret;
 		}
 
+		/* One 8-byte report was requested, so the transfer cannot
+		 * have carried more. Some libusb backends (seen on Windows)
+		 * count one byte more, with a stray 0x00 after the report:
+		 * advancing by that count would leave NUL bytes in the middle
+		 * of the reply, which then reads as a short one.
+		 */
+		if (ret > 8) {
+			upsdebugx(5, "read: ignoring %d extra byte(s) after the 8-byte report",
+				ret - 8);
+			ret = 8;
+		}
+
 		snprintf(tmp, sizeof(tmp), "read [% 3d]", (int)i);
 		upsdebug_hex(5, tmp, &buf[i], (size_t)ret);
 

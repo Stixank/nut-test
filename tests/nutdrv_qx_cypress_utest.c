@@ -86,6 +86,10 @@ static int	sim_flooding;
 /* Zero-length reports the bridge delivers before anything else */
 static int	sim_zero_length_reports;
 
+/* The transport counts one byte more than the 8 requested, with a stray
+ * 0x00 after each report (seen with libusb on Windows) */
+static int	sim_extra_byte;
+
 static char	sim_cmd[SIM_REPORT_SIZE * 8];
 static size_t	sim_cmd_len;
 
@@ -236,6 +240,12 @@ int	LIBUSB_CALL sim_libusb_interrupt_transfer(libusb_device_handle *dev_handle,
 	memcpy(data, sim_queue[0].data, (size_t)*actual_length);
 	memmove(&sim_queue[0], &sim_queue[1], sizeof(sim_queue[0]) * (sim_queue_len - 1));
 	sim_queue_len--;
+
+	if (sim_extra_byte) {
+		data[*actual_length] = 0;
+		(*actual_length)++;
+	}
+
 	return LIBUSB_SUCCESS;
 }
 
@@ -326,6 +336,7 @@ static void	sim_setup(void)
 	SIM_SET_GAPS(gaps_typical);
 	sim_flooding = 0;
 	sim_zero_length_reports = 0;
+	sim_extra_byte = 0;
 	sim_cmd_len = 0;
 	sim_resets = sim_opens = sim_closes = 0;
 	sim_vendorid = 0x0665;
@@ -593,6 +604,18 @@ static void	test_zero_length_reports(void)
 	expect(sim_zero_length_reports == 0, "setup: the zero-length reports were read");
 }
 
+/* A transport which reports one byte more than the 8 requested (a stray
+ * 0x00 after each report) must not leave NUL bytes inside the reply */
+static void	test_extra_byte_after_report(void)
+{
+	sim_extra_byte = 1;
+	expect_walk();
+	sim_now += 2000;
+	expect_walk();
+	expect(sim_dropped == 0, "no reports dropped by the bridge");
+	expect(sim_resets == 0, "no USB resets");
+}
+
 /* The driver may only give up once the reset limit was used up twice below,
  * and only if nothing else in the case failed before */
 static void	check_reset_limit_exit(void)
@@ -731,6 +754,7 @@ static const test_case_t	test_cases[] = {
 	{ "stale data notice is not repeated",	test_stale_notice_throttled,	0,	0 },
 	{ "stale data notice is readable",	test_stale_notice_readable,	0,	0 },
 	{ "zero-length reports before a command",	test_zero_length_reports,	0,	0 },
+	{ "extra byte counted after each report",	test_extra_byte_after_report,	0,	0 },
 	{ "endpoint flood resets the device",	test_flood_resets_device,	0,	0 },
 	{ "endpoint flood while reconnecting",	test_flood_while_reconnecting,	0,	0 },
 	{ "slow endpoint trickle gives up in time",	test_trickle_gives_up_in_time,	0,	0 },

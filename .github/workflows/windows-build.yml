@@ -169,3 +169,54 @@ jobs:
           path: nutdrv_qx-win64.zip
           if-no-files-found: error
           retention-days: 14
+
+  unit-test-cypress:
+    # Native Linux run of the simulated 0665:5161 bridge unit test, which
+    # cannot be executed in the Windows cross-build job above.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential git ca-certificates \
+            autoconf automake libtool pkg-config \
+            python3 python3-pygments \
+            libusb-1.0-0-dev
+
+      - name: Checkout NUT source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prepare generated build system
+        run: |
+          chmod +x autogen.sh
+          ./autogen.sh
+
+      - name: Configure NUT (USB + serial)
+        run: |
+          set -euxo pipefail
+          mkdir -p build-linux
+          cd build-linux
+          ../configure \
+            --with-all=no \
+            --with-usb=yes \
+            --with-serial=yes \
+            --without-ssl \
+            --without-doc \
+            --without-nut-scanner
+
+      - name: Build libraries and run nutdrv_qx_cypress_utest
+        run: |
+          set -euxo pipefail
+          cd build-linux
+          make -j"$(nproc)" all-libs-local
+          make -C tests check TESTS=nutdrv_qx_cypress_utest || {
+            cat tests/nutdrv_qx_cypress_utest.log || true
+            exit 1
+          }
+          cat tests/nutdrv_qx_cypress_utest.log
