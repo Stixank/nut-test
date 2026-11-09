@@ -79,7 +79,7 @@ jobs:
           test -f "$PREFIX/lib/libusb-1.0.dll.a"
           test -f "$PREFIX/lib/pkgconfig/libusb-1.0.pc"
 
-      - name: Configure NUT (nutdrv_qx only)
+      - name: Configure NUT (USB + serial, no optional extras)
         run: |
           set -euxo pipefail
           mkdir -p build-win64
@@ -93,7 +93,6 @@ jobs:
             --build="$(gcc -dumpmachine)" \
             --prefix=/ \
             --with-all=no \
-            --with-drivers=nutdrv_qx \
             --with-usb=yes \
             --with-serial=yes \
             --without-ssl \
@@ -106,7 +105,12 @@ jobs:
         run: |
           set -euxo pipefail
           cd build-win64
-          make -j"$(nproc)"
+          # Note: "--with-drivers=nutdrv_qx" is not used because on Windows
+          # it drops $(EXEEXT) from the program name, so make is asked to
+          # build "nutdrv_qx" instead of "nutdrv_qx.exe". Build the shared
+          # libraries, then only the one driver target explicitly.
+          make -j"$(nproc)" all-libs-local
+          make -j"$(nproc)" -C drivers nutdrv_qx.exe
           find . -iname 'nutdrv_qx*.exe' -print
 
       - name: Verify and package nutdrv_qx for Windows x64
