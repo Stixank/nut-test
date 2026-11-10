@@ -1,0 +1,209 @@
+name: Build usbhid-ups (Delta fix check)
+
+on:
+  push:
+    branches:
+      - fix-delta-ups-source-status
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ARCH: x86_64-w64-mingw32
+  PREFIX: /usr/x86_64-w64-mingw32
+
+jobs:
+  build-usbhid-linux:
+    # Native build with strict warnings: catches mistakes in the mapping
+    # tables of delta_ups-hid.c the way upstream CI would.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential git ca-certificates \
+            autoconf automake libtool pkg-config \
+            python3 python3-pygments \
+            libusb-1.0-0-dev
+
+      - name: Checkout NUT source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prepare generated build system
+        run: |
+          chmod +x autogen.sh
+          ./autogen.sh
+
+      - name: Configure NUT (USB, strict warnings)
+        run: |
+          set -euxo pipefail
+          mkdir -p build-linux
+          cd build-linux
+          ../configure \
+            --with-all=no \
+            --with-usb=yes \
+            --with-serial=yes \
+            --without-ssl \
+            --without-doc \
+            --without-nut-scanner \
+            --enable-Werror
+
+      - name: Build usbhid-ups
+        run: |
+          set -euxo pipefail
+          cd build-linux
+          make -j"$(nproc)" all-libs-local
+          make -j"$(nproc)" -C drivers usbhid-ups
+          ./drivers/usbhid-ups -V
+          # The Delta subdriver must be linked in with the new version
+          strings drivers/usbhid-ups | grep -F "Delta UPS HID 0.7"
+
+  build-usbhid-win64:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Install MinGW cross-build toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            git curl wget ca-certificates \
+            mingw-w64 \
+            autoconf automake libtool pkg-config \
+            python3 python3-pygments \
+            unzip zip xz-utils
+
+      - name: Checkout NUT source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prepare generated build system
+        run: |
+          git config --global core.autocrlf input
+          chmod +x autogen.sh
+          ./autogen.sh
+
+      - name: Build regex dependency (libgnurx)
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/nut-deps"
+          cd "$RUNNER_TEMP/nut-deps"
+          wget -nv --tries=5 --retry-connrefused -L \
+            -O mingw-libgnurx-2.5.1-src.tar.gz \
+            "https://downloads.sourceforge.net/project/mingw/Other/UserContributed/regex/mingw-regex-2.5.1/mingw-libgnurx-2.5.1-src.tar.gz"
+          tar -xzf mingw-libgnurx-2.5.1-src.tar.gz
+          cd mingw-libgnurx-2.5.1
+          ./configure --prefix="$PREFIX" --host="$ARCH"
+          make
+          sudo make install
+          cd "$PREFIX/lib"
+          for EXT in a dll.a; do
+            if [ -f "libgnurx.$EXT" ] && [ ! -e "libregex.$EXT" ]; then
+              sudo ln -s "libgnurx.$EXT" "libregex.$EXT"
+            fi
+          done
+
+      - name: Build libusb-1.0 dependency
+        run: |
+          set -euxo pipefail
+          cd "$RUNNER_TEMP/nut-deps"
+          wget -nv --tries=5 --retry-connrefused -L \
+            -O libusb-1.0.26.tar.bz2 \
+            "https://github.com/libusb/libusb/releases/download/v1.0.26/libusb-1.0.26.tar.bz2"
+          tar -xjf libusb-1.0.26.tar.bz2
+          cd libusb-1.0.26
+          ./configure --prefix="$PREFIX" --host="$ARCH"
+          make -j"$(nproc)"
+          sudo make install
+
+      - name: Configure NUT (USB + serial, no optional extras)
+        run: |
+          set -euxo pipefail
+          mkdir -p build-win64
+          cd build-win64
+          export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
+          export CFLAGS="-D_POSIX=1 -D_POSIX_C_SOURCE=200112L -D_POSIX_THREAD_SAFE_FUNCTIONS=200112L -D_WIN32_WINNT=0xffff -I$PREFIX/include"
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS="-L$PREFIX/lib"
+          ../configure \
+            --host="$ARCH" \
+            --build="$(gcc -dumpmachine)" \
+            --prefix=/ \
+            --with-all=no \
+            --with-usb=yes \
+            --with-serial=yes \
+            --without-ssl \
+            --without-doc \
+            --without-systemdsystemunitdir \
+            --without-nut-scanner \
+            --without-libltdl
+
+      - name: Build usbhid-ups.exe
+        run: |
+          set -euxo pipefail
+          cd build-win64
+          make -j"$(nproc)" all-libs-local
+          make -j"$(nproc)" -C drivers usbhid-ups.exe
+          find . -iname 'usbhid-ups*.exe' -print
+
+      - name: Package usbhid-ups for Windows x64
+        run: |
+          set -euxo pipefail
+          OUT="$PWD/usbhid-ups-win64"
+          rm -rf "$OUT"
+          mkdir -p "$OUT/bin"
+
+          EXE=""
+          for CAND in $(find build-win64 -iname 'usbhid-ups.exe' -type f | sort); do
+            if file "$CAND" | grep -q 'PE32+'; then EXE="$CAND"; break; fi
+          done
+          test -n "$EXE"
+          cp -p "$EXE" "$OUT/bin/usbhid-ups.exe"
+          file "$OUT/bin/usbhid-ups.exe"
+
+          SEARCH_DIRS="$PREFIX/bin $PREFIX/lib $(ls -d /usr/lib/gcc/$ARCH/*/ 2>/dev/null | tr '\n' ' ')"
+          bundle_deps() {
+            for F in "$@"; do
+              for DLL in $($ARCH-objdump -p "$F" | awk '/DLL Name:/ {print $3}'); do
+                [ -e "$OUT/bin/$DLL" ] && continue
+                for D in $SEARCH_DIRS; do
+                  if [ -f "$D/$DLL" ]; then
+                    cp -p "$D/$DLL" "$OUT/bin/"
+                    bundle_deps "$OUT/bin/$DLL"
+                    break
+                  fi
+                done
+              done
+            done
+          }
+          bundle_deps "$OUT/bin/usbhid-ups.exe"
+
+          echo "Imported DLLs of usbhid-ups.exe:"
+          $ARCH-objdump -p "$OUT/bin/usbhid-ups.exe" | awk '/DLL Name:/ {print "  " $3}'
+          ls -la "$OUT/bin"
+          grep -c "Delta UPS HID 0.7" "$OUT/bin/usbhid-ups.exe"
+
+          {
+            echo "Commit: $(git rev-parse HEAD)"
+            echo "Build: usbhid-ups for Windows x64 (MinGW-w64 cross-build on ubuntu-22.04)"
+          } > "$OUT/BUILD-INFO.txt"
+
+          zip -r usbhid-ups-win64.zip usbhid-ups-win64
+
+      - name: Upload usbhid-ups Windows x64 bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: usbhid-ups-win64-delta-source-status
+          path: usbhid-ups-win64.zip
+          if-no-files-found: error
+          retention-days: 14
