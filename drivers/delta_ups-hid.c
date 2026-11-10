@@ -30,7 +30,7 @@
 #include "main.h"	/* for getval() */
 #include "usb-common.h"
 
-#define DELTA_UPS_HID_VERSION	"Delta UPS HID 0.6"
+#define DELTA_UPS_HID_VERSION	"Delta UPS HID 0.7"
 
 /* Delta UPS */
 #define DELTA_VENDORID	0x05dd
@@ -163,6 +163,39 @@ static info_lkp_t delta_ups_output_source_info[] = {
 	{ 0, NULL, NULL, NULL }
 };
 
+/* Power state derived from DeltaOutputSource. On some units (seen with
+ * DELTA UPS602R2RT2N035) the "ACPresent" bit stays at 0 even though the
+ * UPS runs from mains, so ups.status would show OB all the time. Entries
+ * using these tables must come AFTER the "ACPresent" entry in the mapping
+ * below: process_boolean_info() lets the later "online"/"offline" win.
+ * Values not listed (6 "other", 7 "no output") leave the decision to
+ * whatever the other status bits said.
+ */
+static info_lkp_t delta_ups_source_power_info[] = {
+	{ 0, "online", NULL, NULL },	/* normal */
+	{ 1, "offline", NULL, NULL },	/* battery */
+	{ 2, "online", NULL, NULL },	/* bypass/reserve */
+	{ 3, "online", NULL, NULL },	/* reducing */
+	{ 4, "online", NULL, NULL },	/* boosting */
+	{ 5, "online", NULL, NULL },	/* manual bypass */
+	{ 8, "online", NULL, NULL },	/* on eco */
+
+	/* Terminating entry */
+	{ 0, NULL, NULL, NULL }
+};
+
+/* Extra status flags for the mains-fed modes of DeltaOutputSource */
+static info_lkp_t delta_ups_source_mode_info[] = {
+	{ 2, "bypassauto", NULL, NULL },	/* bypass/reserve */
+	{ 3, "trim", NULL, NULL },	/* reducing */
+	{ 4, "boost", NULL, NULL },	/* boosting */
+	{ 5, "bypassman", NULL, NULL },	/* manual bypass */
+	{ 8, "ecomode", NULL, NULL },	/* on eco */
+
+	/* Terminating entry */
+	{ 0, NULL, NULL, NULL }
+};
+
 /* --------------------------------------------------------------- */
 /* HID2NUT lookup table                                            */
 /* --------------------------------------------------------------- */
@@ -179,7 +212,7 @@ static hid_info_t delta_ups_hid2nut[] = {
 	{ "input.transfer.high.min", 0, 0, "UPS.PowerConverter.Output.DeltaConfigTransferHighMin", NULL, "%.1f", HU_FLAG_STATIC, NULL },
 	{ "input.transfer.high.max", 0, 0, "UPS.PowerConverter.Output.DeltaConfigTransferHighMax", NULL, "%.1f", HU_FLAG_STATIC, NULL },
 	/* FIXME: Check vs. hardware, is this an "input" or "outlet/outpu" value after all? */
-	{ "input.source", 0, 0, "UPS.OutletSystem.Outlet.DeltaOutputSource", NULL, "%s", 0, delta_ups_output_source_info },
+	{ "input.source", 0, 0, "UPS.OutletSystem.Outlet.DeltaOutputSource", NULL, "%s", HU_FLAG_QUICK_POLL, delta_ups_output_source_info },
 	{ "input.frequency", 0, 0, "UPS.PowerConverter.Input.Frequency", NULL, "%.1f", HU_FLAG_QUICK_POLL, NULL },
 
 	{ "battery.voltage.nominal", 0, 0, "UPS.BatterySystem.Battery.ConfigVoltage", NULL, "%.1f", HU_FLAG_STATIC, NULL },
@@ -246,6 +279,11 @@ static hid_info_t delta_ups_hid2nut[] = {
 	{ "BOOL", 0, 0, "UPS.PowerConverter.PresentStatus.OverTemperature", NULL, NULL, HU_FLAG_QUICK_POLL, overheat_info },
 	{ "BOOL", 0, 0, "UPS.PowerConverter.PresentStatus.InternalFailure", NULL, NULL, HU_FLAG_QUICK_POLL, commfault_info },
 	{ "BOOL", 0, 0, "UPS.PowerConverter.PresentStatus.AwaitingPower", NULL, NULL, HU_FLAG_QUICK_POLL, awaitingpower_info },
+
+	/* Keep these two AFTER the "ACPresent" entry above, see the comment
+	 * at delta_ups_source_power_info[] */
+	{ "BOOL", 0, 0, "UPS.OutletSystem.Outlet.DeltaOutputSource", NULL, NULL, HU_FLAG_QUICK_POLL, delta_ups_source_power_info },
+	{ "BOOL", 0, 0, "UPS.OutletSystem.Outlet.DeltaOutputSource", NULL, NULL, HU_FLAG_QUICK_POLL, delta_ups_source_mode_info },
 
 	{ "beeper.on", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", NULL, "2", HU_TYPE_CMD, NULL },
 	{ "beeper.off", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", NULL, "3", HU_TYPE_CMD, NULL },
